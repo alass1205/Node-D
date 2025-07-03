@@ -1,0 +1,364 @@
+package ethereum
+
+import (
+	"context"
+	"fmt"
+	"math/big"
+	"sync"
+
+	"benchy/internal/domain/entities"
+	"benchy/internal/domain/ports"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/rpc"
+)
+
+// EthereumClient implémente l'interface EthereumService
+type EthereumClient struct {
+	clients map[string]*ethclient.Client
+	rpcClients map[string]*rpc.Client
+	mutex   sync.RWMutex
+}
+
+// NewEthereumClient crée un nouveau client Ethereum
+func NewEthereumClient() *EthereumClient {
+	return &EthereumClient{
+		clients:    make(map[string]*ethclient.Client),
+		rpcClients: make(map[string]*rpc.Client),
+	}
+}
+
+// ConnectToNode se connecte à un node Ethereum
+func (ec *EthereumClient) ConnectToNode(ctx context.Context, nodeURL string) error {
+	ec.mutex.Lock()
+	defer ec.mutex.Unlock()
+
+	// Vérifier si déjà connecté
+	if _, exists := ec.clients[nodeURL]; exists {
+		return nil
+	}
+
+	// Créer la connexion RPC
+	rpcClient, err := rpc.DialContext(ctx, nodeURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to RPC: %w", err)
+	}
+
+	// Créer le client Ethereum
+	ethClient := ethclient.NewClient(rpcClient)
+
+	// Tester la connexion
+	_, err = ethClient.NetworkID(ctx)
+	if err != nil {
+		rpcClient.Close()
+		return fmt.Errorf("failed to get network ID: %w", err)
+	}
+
+	// Stocker les clients
+	ec.clients[nodeURL] = ethClient
+	ec.rpcClients[nodeURL] = rpcClient
+
+	return nil
+}
+
+// DisconnectFromNode se déconnecte d'un node
+func (ec *EthereumClient) DisconnectFromNode(ctx context.Context, nodeURL string) error {
+	ec.mutex.Lock()
+	defer ec.mutex.Unlock()
+
+	if rpcClient, exists := ec.rpcClients[nodeURL]; exists {
+		rpcClient.Close()
+		delete(ec.clients, nodeURL)
+		delete(ec.rpcClients, nodeURL)
+	}
+
+	return nil
+}
+
+// IsNodeConnected vérifie si un node est connecté
+func (ec *EthereumClient) IsNodeConnected(ctx context.Context, nodeURL string) (bool, error) {
+	ec.mutex.RLock()
+	client, exists := ec.clients[nodeURL]
+	ec.mutex.RUnlock()
+
+	if !exists {
+		return false, nil
+	}
+
+	// Tester la connexion
+	_, err := client.NetworkID(ctx)
+	return err == nil, nil
+}
+
+// GetLatestBlockNumber récupère le numéro du dernier bloc
+func (ec *EthereumClient) GetLatestBlockNumber(ctx context.Context, nodeURL string) (uint64, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return 0, err
+	}
+
+	blockNumber, err := client.BlockNumber(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get block number: %w", err)
+	}
+
+	return blockNumber, nil
+}
+
+// GetBlockByNumber récupère un bloc par son numéro
+func (ec *EthereumClient) GetBlockByNumber(ctx context.Context, nodeURL string, blockNumber uint64) (*ports.BlockInfo, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := client.BlockByNumber(ctx, big.NewInt(int64(blockNumber)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block: %w", err)
+	}
+
+	// Extraire les hashes des transactions
+	txHashes := make([]common.Hash, len(block.Transactions()))
+	for i, tx := range block.Transactions() {
+		txHashes[i] = tx.Hash()
+	}
+
+	blockInfo := &ports.BlockInfo{
+		Number:       block.NumberU64(),
+		Hash:         block.Hash(),
+		ParentHash:   block.ParentHash(),
+		Timestamp:    block.Time(),
+		Difficulty:   block.Difficulty(),
+		GasLimit:     block.GasLimit(),
+		GasUsed:      block.GasUsed(),
+		Transactions: txHashes,
+		Miner:        block.Coinbase(),
+	}
+
+	return blockInfo, nil
+}
+
+// GetPeerCount récupère le nombre de peers connectés
+func (ec *EthereumClient) GetPeerCount(ctx context.Context, nodeURL string) (int, error) {
+	rpcClient, err := ec.getRPCClient(nodeURL)
+	if err != nil {
+		return 0, err
+	}
+
+	var result string
+	if err := rpcClient.CallContext(ctx, &result, "net_peerCount"); err != nil {
+		return 0, fmt.Errorf("failed to get peer count: %w", err)
+	}
+
+	// Convertir hex en int
+	peerCount := new(big.Int)
+	peerCount.SetString(result[2:], 16) // Enlever le préfixe "0x"
+
+	return int(peerCount.Int64()), nil
+}
+
+// GetPendingTransactionCount récupère le nombre de transactions en attente
+func (ec *EthereumClient) GetPendingTransactionCount(ctx context.Context, nodeURL string) (int, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return 0, err
+	}
+
+	count, err := client.PendingTransactionCount(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get pending transaction count: %w", err)
+	}
+
+	return int(count), nil
+}
+
+// GetBalance récupère la balance d'une adresse
+func (ec *EthereumClient) GetBalance(ctx context.Context, nodeURL string, address common.Address) (*big.Int, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return nil, err
+	}
+
+	balance, err := client.BalanceAt(ctx, address, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get balance: %w", err)
+	}
+
+	return balance, nil
+}
+
+// GetNonce récupère le nonce d'une adresse
+func (ec *EthereumClient) GetNonce(ctx context.Context, nodeURL string, address common.Address) (uint64, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return 0, err
+	}
+
+	nonce, err := client.PendingNonceAt(ctx, address)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get nonce: %w", err)
+	}
+
+	return nonce, nil
+}
+
+// SendTransaction envoie une transaction
+func (ec *EthereumClient) SendTransaction(ctx context.Context, nodeURL string, tx *entities.Transaction) (common.Hash, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	// Pour l'instant, on simule l'envoi d'une transaction
+	// TODO: Implémenter l'envoi réel avec signature
+	
+	// Générer un hash fictif pour la démonstration
+	hash := common.HexToHash(fmt.Sprintf("0x%064d", tx.Nonce))
+	
+	return hash, nil
+}
+
+// GetTransactionStatus récupère le statut d'une transaction
+func (ec *EthereumClient) GetTransactionStatus(ctx context.Context, nodeURL string, txHash common.Hash) (entities.TransactionStatus, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return entities.TxStatusFailed, err
+	}
+
+	// Vérifier si la transaction existe
+	_, isPending, err := client.TransactionByHash(ctx, txHash)
+	if err != nil {
+		return entities.TxStatusFailed, fmt.Errorf("failed to get transaction: %w", err)
+	}
+
+	if isPending {
+		return entities.TxStatusPending, nil
+	}
+
+	// Vérifier le reçu
+	receipt, err := client.TransactionReceipt(ctx, txHash)
+	if err != nil {
+		return entities.TxStatusPending, nil // Probablement encore en attente
+	}
+
+	if receipt.Status == 1 {
+		return entities.TxStatusConfirmed, nil
+	}
+
+	return entities.TxStatusFailed, nil
+}
+
+// GetTransactionReceipt récupère le reçu d'une transaction
+func (ec *EthereumClient) GetTransactionReceipt(ctx context.Context, nodeURL string, txHash common.Hash) (*ports.TransactionReceipt, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return nil, err
+	}
+
+	receipt, err := client.TransactionReceipt(ctx, txHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transaction receipt: %w", err)
+	}
+
+	// Convertir les logs
+	logs := make([]ports.LogEntry, len(receipt.Logs))
+	for i, log := range receipt.Logs {
+		logs[i] = ports.LogEntry{
+			Address: log.Address,
+			Topics:  log.Topics,
+			Data:    log.Data,
+		}
+	}
+
+	result := &ports.TransactionReceipt{
+		TransactionHash:  receipt.TxHash,
+		BlockNumber:      receipt.BlockNumber.Uint64(),
+		BlockHash:        receipt.BlockHash,
+		TransactionIndex: receipt.TransactionIndex,
+		From:             receipt.From,
+		To:               *receipt.To,
+		GasUsed:          receipt.GasUsed,
+		Status:           receipt.Status,
+		ContractAddress:  receipt.ContractAddress,
+		Logs:             logs,
+	}
+
+	return result, nil
+}
+
+// DeployContract déploie un smart contract
+func (ec *EthereumClient) DeployContract(ctx context.Context, nodeURL string, contractCode []byte, from common.Address) (common.Address, common.Hash, error) {
+	// Pour l'instant, on simule le déploiement
+	// TODO: Implémenter le déploiement réel
+	
+	contractAddress := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	txHash := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	
+	return contractAddress, txHash, nil
+}
+
+// CallContract appelle une méthode de smart contract
+func (ec *EthereumClient) CallContract(ctx context.Context, nodeURL string, contractAddress common.Address, data []byte) ([]byte, error) {
+	client, err := ec.getClient(nodeURL)
+	if err != nil {
+		return nil, err
+	}
+
+	msg := ethereum.CallMsg{
+		To:   &contractAddress,
+		Data: data,
+	}
+
+	result, err := client.CallContract(ctx, msg, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call contract: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetTokenBalance récupère la balance d'un token ERC20
+func (ec *EthereumClient) GetTokenBalance(ctx context.Context, nodeURL string, tokenAddress, holderAddress common.Address) (*big.Int, error) {
+	// Pour l'instant, on simule la récupération de balance de token
+	// TODO: Implémenter l'appel réel au contract ERC20
+	
+	return big.NewInt(1000), nil // 1000 tokens par défaut
+}
+
+// TransferToken transfère des tokens ERC20
+func (ec *EthereumClient) TransferToken(ctx context.Context, nodeURL string, tokenAddress, from, to common.Address, amount *big.Int) (common.Hash, error) {
+	// Pour l'instant, on simule le transfert de tokens
+	// TODO: Implémenter le transfert réel
+	
+	txHash := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	
+	return txHash, nil
+}
+
+// Méthodes utilitaires privées
+
+func (ec *EthereumClient) getClient(nodeURL string) (*ethclient.Client, error) {
+	ec.mutex.RLock()
+	defer ec.mutex.RUnlock()
+
+	client, exists := ec.clients[nodeURL]
+	if !exists {
+		return nil, fmt.Errorf("not connected to node %s", nodeURL)
+	}
+
+	return client, nil
+}
+
+func (ec *EthereumClient) getRPCClient(nodeURL string) (*rpc.Client, error) {
+	ec.mutex.RLock()
+	defer ec.mutex.RUnlock()
+
+	client, exists := ec.rpcClients[nodeURL]
+	if !exists {
+		return nil, fmt.Errorf("not connected to node %s", nodeURL)
+	}
+
+	return client, nil
+}
