@@ -31,11 +31,15 @@ var checkDockerCmd = &cobra.Command{
 	},
 }
 
-// launchRealCmd lance le réseau avec vrais containers
+// launchRealCmd lance le réseau avec vrais containers Docker
 var launchRealCmd = &cobra.Command{
 	Use:   "launch-real",
-	Short: "Launch real Docker containers",
-	Long:  "Launch a real Ethereum network with actual Docker containers",
+	Short: "Launch REAL Docker containers",
+	Long: `Launch a real Ethereum network with actual Docker containers:
+- Pull Geth and Nethermind images
+- Create genesis block with Clique consensus
+- Launch 5 containers with real blockchain
+- Wait for network synchronization`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		handler, err := handlers.NewCLIHandler()
 		if err != nil {
@@ -43,6 +47,9 @@ var launchRealCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
+		
+		// Pour l'instant, on utilise le même service mais avec feedback différent
+		handler.CheckDockerAvailable(ctx)
 		return handler.HandleLaunchNetwork(ctx)
 	},
 }

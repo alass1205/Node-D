@@ -18,7 +18,7 @@ import (
 
 // NetworkServiceReal implémente le lancement de vrais containers
 type NetworkServiceReal struct {
-	dockerClient  *docker.DockerClient
+	dockerClient  *docker.DockerClientReal
 	ethClient     *ethereum.EthereumClient
 	monitor       *monitoring.SystemMonitor
 	feedback      *feedback.ConsoleFeedback
@@ -29,7 +29,7 @@ type NetworkServiceReal struct {
 // NewNetworkServiceReal crée un service avec vrais containers
 func NewNetworkServiceReal(baseDir string) (*NetworkServiceReal, error) {
 	// Créer les clients infrastructure
-	dockerClient, err := docker.NewDockerClient()
+	dockerClient, err := docker.NewDockerClientReal()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker client: %w", err)
 	}
