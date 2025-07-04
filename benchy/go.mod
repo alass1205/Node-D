@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/briandowns/spinner v1.23.0
-	github.com/docker/docker v20.10.24+incompatible
+	github.com/docker/docker v24.0.9+incompatible
 	github.com/docker/go-connections v0.4.0
 	github.com/ethereum/go-ethereum v1.10.26
 	github.com/fatih/color v1.15.0
@@ -52,7 +52,6 @@ require (
 	github.com/prometheus/tsdb v0.7.1 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/afero v1.9.5 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect

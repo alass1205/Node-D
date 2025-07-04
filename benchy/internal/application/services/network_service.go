@@ -178,8 +178,8 @@ func (ns *NetworkService) buildContainerConfig(nodeConfig *config.NodeConfig) po
 	// Configuration spécifique selon le client
 	switch nodeConfig.Client {
 	case entities.ClientGeth:
-		config.Image = "ethereum/client-go:latest"
-		config.Command = ns.buildGethCommand(nodeConfig)
+		config.Image = "ethereum/client-go:alltools-stable"
+		config.Command = append([]string{"geth"}, ns.buildGethCommand(nodeConfig)...)
 	case entities.ClientNethermind:
 		config.Image = "nethermind/nethermind:latest"
 		config.Command = ns.buildNethermindCommand(nodeConfig)
@@ -189,9 +189,9 @@ func (ns *NetworkService) buildContainerConfig(nodeConfig *config.NodeConfig) po
 }
 
 // buildGethCommand construit la commande pour Geth
+// buildGethCommand construit la commande pour Geth
 func (ns *NetworkService) buildGethCommand(nodeConfig *config.NodeConfig) []string {
 	cmd := []string{
-		"geth",
 		"--datadir", "/data",
 		"--keystore", "/keystore",
 		"--networkid", "1337",
@@ -201,11 +201,6 @@ func (ns *NetworkService) buildGethCommand(nodeConfig *config.NodeConfig) []stri
 		"--http.port", fmt.Sprintf("%d", nodeConfig.RPCPort),
 		"--http.api", "eth,net,web3,personal,miner,admin",
 		"--http.corsdomain", "*",
-		"--ws",
-		"--ws.addr", "0.0.0.0",
-		"--ws.port", fmt.Sprintf("%d", nodeConfig.WSPort),
-		"--ws.api", "eth,net,web3,personal,miner,admin",
-		"--ws.origins", "*",
 		"--allow-insecure-unlock",
 		"--nodiscover",
 		"--maxpeers", "25",
@@ -213,13 +208,9 @@ func (ns *NetworkService) buildGethCommand(nodeConfig *config.NodeConfig) []stri
 		"--verbosity", "3",
 	}
 
-	// Initialiser avec le genesis si c'est le premier démarrage
-	cmd = append(cmd, "--init", "/genesis.json")
-
 	if nodeConfig.IsValidator {
-		cmd = append(cmd, 
-			"--mine", 
-			"--miner.threads", "1",
+		cmd = append(cmd,
+			"--mine",
 			"--miner.etherbase", nodeConfig.KeyPair.Address.Hex(),
 		)
 	}
