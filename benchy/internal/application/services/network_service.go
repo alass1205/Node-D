@@ -88,7 +88,7 @@ func (ns *NetworkService) LaunchNetwork(ctx context.Context) error {
 
 	ns.feedback.Success(ctx, "✅ Docker network created")
 
-	// 5. Lancer chaque node
+	// 5. Lancer chaque node (seulement Geth pour l'instant)
 	nodes := ns.configManager.GetAllNodes()
 	progress, err := ns.feedback.StartProgress(ctx, "Launching nodes", len(nodes))
 	if err != nil {
@@ -96,15 +96,29 @@ func (ns *NetworkService) LaunchNetwork(ctx context.Context) error {
 	}
 	defer progress.Close()
 
+	successCount := 0
 	for i, nodeConfig := range nodes {
-		if err := ns.launchNode(ctx, nodeConfig); err != nil {
-			progress.Error(fmt.Sprintf("Failed to launch %s: %v", nodeConfig.Name, err))
-			return fmt.Errorf("failed to launch node %s: %w", nodeConfig.Name, err)
+		// Pour l'instant, on lance seulement les nodes Geth
+		if nodeConfig.Client == entities.ClientNethermind {
+			progress.Update(i+1, fmt.Sprintf("⏭️  %s skipped (Nethermind)", nodeConfig.Name))
+			continue
 		}
+
+		if err := ns.launchNode(ctx, nodeConfig); err != nil {
+			progress.Update(i+1, fmt.Sprintf("❌ %s failed: %v", nodeConfig.Name, err))
+			// Continue avec les autres nodes
+			continue
+		}
+		successCount++
 		progress.Update(i+1, fmt.Sprintf("✅ %s launched", nodeConfig.Name))
 	}
 
-	progress.Complete("All nodes launched successfully")
+	if successCount == 0 {
+		progress.Error("No nodes launched successfully")
+		return fmt.Errorf("failed to launch any nodes")
+	}
+
+	progress.Complete(fmt.Sprintf("%d nodes launched successfully", successCount))
 
 	// 6. Démarrer le monitoring
 	network := ns.createNetworkEntity(nodes)
@@ -112,7 +126,7 @@ func (ns *NetworkService) LaunchNetwork(ctx context.Context) error {
 		ns.feedback.Warning(ctx, fmt.Sprintf("Warning: monitoring failed to start: %v", err))
 	}
 
-	ns.feedback.Success(ctx, "🎉 Network launched successfully!")
+	ns.feedback.Success(ctx, fmt.Sprintf("🎉 Network launched successfully! (%d nodes)", successCount))
 	ns.feedback.Info(ctx, "💡 Use 'benchy infos' to monitor the network")
 	ns.feedback.Info(ctx, "💡 Use 'docker ps' to see the containers")
 
@@ -121,8 +135,8 @@ func (ns *NetworkService) LaunchNetwork(ctx context.Context) error {
 
 // launchNode lance un node individuel
 func (ns *NetworkService) launchNode(ctx context.Context, nodeConfig *config.NodeConfig) error {
-	// Préparer la configuration du container
-	containerConfig := ns.buildContainerConfig(nodeConfig)
+	// Préparer la configuration du container SIMPLIFIÉE
+	containerConfig := ns.buildSimpleContainerConfig(nodeConfig)
 
 	// Créer le node entity
 	node := entities.NewNode(
@@ -140,11 +154,7 @@ func (ns *NetworkService) launchNode(ctx context.Context, nodeConfig *config.Nod
 		return fmt.Errorf("failed to create container: %w", err)
 	}
 
-	// Démarrer le container
-	if err := ns.dockerClient.StartContainer(ctx, containerID); err != nil {
-		return fmt.Errorf("failed to start container: %w", err)
-	}
-
+	// Le container est déjà démarré par docker run -d
 	// Mettre à jour le node avec l'ID du container
 	node.ContainerID = containerID
 	node.Status = entities.StatusStarting
@@ -152,12 +162,11 @@ func (ns *NetworkService) launchNode(ctx context.Context, nodeConfig *config.Nod
 	return nil
 }
 
-// buildContainerConfig construit la configuration du container pour un node
-func (ns *NetworkService) buildContainerConfig(nodeConfig *config.NodeConfig) ports.ContainerConfig {
-	genesisPath := filepath.Join(ns.baseDir, "configs", "genesis.json")
-	
+// buildSimpleContainerConfig construit une configuration simple du container
+func (ns *NetworkService) buildSimpleContainerConfig(nodeConfig *config.NodeConfig) ports.ContainerConfig {
 	config := ports.ContainerConfig{
 		Name: fmt.Sprintf("benchy-%s", nodeConfig.Name),
+		Image: "ethereum/client-go:v1.13.15",
 		Ports: map[string]string{
 			fmt.Sprintf("%d", nodeConfig.Port):    fmt.Sprintf("%d", nodeConfig.Port),
 			fmt.Sprintf("%d", nodeConfig.RPCPort): fmt.Sprintf("%d", nodeConfig.RPCPort),
@@ -165,7 +174,6 @@ func (ns *NetworkService) buildContainerConfig(nodeConfig *config.NodeConfig) po
 		Volumes: map[string]string{
 			nodeConfig.DataDir:     "/data",
 			nodeConfig.KeystoreDir: "/keystore",
-			genesisPath:           "/genesis.json",
 		},
 		NetworkMode: "benchy-network",
 		Labels: map[string]string{
@@ -175,31 +183,16 @@ func (ns *NetworkService) buildContainerConfig(nodeConfig *config.NodeConfig) po
 		},
 	}
 
-	// Configuration spécifique selon le client
-	switch nodeConfig.Client {
-	case entities.ClientGeth:
-		config.Image = "ethereum/client-go:alltools-stable"
-		config.Command = append([]string{"geth"}, ns.buildGethCommand(nodeConfig)...)
-	case entities.ClientNethermind:
-		config.Image = "nethermind/nethermind:latest"
-		config.Command = ns.buildNethermindCommand(nodeConfig)
-	}
-
-	return config
-}
-
-// buildGethCommand construit la commande pour Geth
-// buildGethCommand construit la commande pour Geth
-func (ns *NetworkService) buildGethCommand(nodeConfig *config.NodeConfig) []string {
-	cmd := []string{
+	// Commande Geth simplifiée
+	config.Command = []string{
+		
 		"--datadir", "/data",
-		"--keystore", "/keystore",
 		"--networkid", "1337",
 		"--port", fmt.Sprintf("%d", nodeConfig.Port),
 		"--http",
 		"--http.addr", "0.0.0.0",
 		"--http.port", fmt.Sprintf("%d", nodeConfig.RPCPort),
-		"--http.api", "eth,net,web3,personal,miner,admin",
+		"--http.api", "eth,net,web3,personal,miner",
 		"--http.corsdomain", "*",
 		"--allow-insecure-unlock",
 		"--nodiscover",
@@ -208,29 +201,15 @@ func (ns *NetworkService) buildGethCommand(nodeConfig *config.NodeConfig) []stri
 		"--verbosity", "3",
 	}
 
+	// Ajouter les options de mining pour les validateurs
 	if nodeConfig.IsValidator {
-		cmd = append(cmd,
+		config.Command = append(config.Command,
 			"--mine",
 			"--miner.etherbase", nodeConfig.KeyPair.Address.Hex(),
 		)
 	}
 
-	return cmd
-}
-
-// buildNethermindCommand construit la commande pour Nethermind
-func (ns *NetworkService) buildNethermindCommand(nodeConfig *config.NodeConfig) []string {
-	return []string{
-		"./Nethermind.Runner",
-		"--config", "mainnet",
-		"--datadir", "/data",
-		"--Network.DiscoveryPort", fmt.Sprintf("%d", nodeConfig.Port),
-		"--Network.P2PPort", fmt.Sprintf("%d", nodeConfig.Port),
-		"--JsonRpc.Enabled", "true",
-		"--JsonRpc.Host", "0.0.0.0",
-		"--JsonRpc.Port", fmt.Sprintf("%d", nodeConfig.RPCPort),
-		"--JsonRpc.EnabledModules", "Eth,Subscribe,Trace,TxPool,Web3,Personal,Proof,Net,Parity,Health,Rpc",
-	}
+	return config
 }
 
 // createNetworkEntity crée une entité Network depuis les configurations
