@@ -59,7 +59,7 @@ func (ns *NetworkService) LaunchNetwork(ctx context.Context) error {
 	}
 	ns.feedback.Success(ctx, "✅ Docker network created")
 
-	// 3. Lancer tous les 5 nodes avec Clique
+	// 3. Lancer tous les 5 nodes avec genesis init
 	progress, err := ns.feedback.StartProgress(ctx, "Launching nodes", 5)
 	if err != nil {
 		return err
@@ -68,21 +68,21 @@ func (ns *NetworkService) LaunchNetwork(ctx context.Context) error {
 
 	successCount := 0
 	
-	// Alice (Geth avec Clique)
-	if err := ns.launchAliceNodeClique(ctx); err != nil {
+	// Alice (Geth avec Genesis Init)
+	if err := ns.launchAliceNodeWithGenesis(ctx); err != nil {
 		progress.Update(1, fmt.Sprintf("❌ alice failed: %v", err))
 	} else {
 		successCount++
-		progress.Update(1, "✅ alice launched (Geth+Clique)")
+		progress.Update(1, "✅ alice launched (Geth+Genesis)")
 	}
 	time.Sleep(2 * time.Second)
 
-	// Bob (Geth avec Clique)
-	if err := ns.launchBobNodeClique(ctx); err != nil {
+	// Bob (Geth avec Genesis Init)
+	if err := ns.launchBobNodeWithGenesis(ctx); err != nil {
 		progress.Update(2, fmt.Sprintf("❌ bob failed: %v", err))
 	} else {
 		successCount++
-		progress.Update(2, "✅ bob launched (Geth+Clique)")
+		progress.Update(2, "✅ bob launched (Geth+Genesis)")
 	}
 	time.Sleep(2 * time.Second)
 
@@ -95,12 +95,12 @@ func (ns *NetworkService) LaunchNetwork(ctx context.Context) error {
 	}
 	time.Sleep(1 * time.Second)
 
-	// Driss (Geth sans mining)
-	if err := ns.launchDrissNodeClique(ctx); err != nil {
+	// Driss (Geth avec Genesis)
+	if err := ns.launchDrissNodeWithGenesis(ctx); err != nil {
 		progress.Update(4, fmt.Sprintf("❌ driss failed: %v", err))
 	} else {
 		successCount++
-		progress.Update(4, "✅ driss launched (Geth+Clique)")
+		progress.Update(4, "✅ driss launched (Geth+Genesis)")
 	}
 	time.Sleep(1 * time.Second)
 
@@ -127,15 +127,32 @@ func (ns *NetworkService) LaunchNetwork(ctx context.Context) error {
 	return nil
 }
 
-// launchAliceNodeClique lance Alice avec Geth et Clique (VALIDATOR)
-func (ns *NetworkService) launchAliceNodeClique(ctx context.Context) error {
+// launchAliceNodeWithGenesis lance Alice avec genesis init
+func (ns *NetworkService) launchAliceNodeWithGenesis(ctx context.Context) error {
+	// Étape 1: Init genesis
+	initCmd := []string{
+		"docker", "run", "--rm",
+		"-v", filepath.Join(ns.baseDir, "nodes/alice/data") + ":/data",
+		"-v", filepath.Join(ns.baseDir, "genesis.json") + ":/genesis.json",
+		"--network", "benchy-network",
+		"ethereum/client-go:v1.13.15",
+		"--datadir", "/data", "init", "/genesis.json",
+	}
+	
+	fmt.Printf("DEBUG INIT: %s\n", strings.Join(initCmd[1:], " "))
+	execInitCmd := exec.CommandContext(ctx, initCmd[0], initCmd[1:]...)
+	if err := execInitCmd.Run(); err != nil {
+		return fmt.Errorf("failed to init alice genesis: %w", err)
+	}
+
+	// Étape 2: Lancer le node
 	cmd := []string{
 		"docker", "run", "-d",
 		"--name", "benchy-alice",
 		"-p", "8545:8545",
 		"-p", "30303:30303",
 		"-v", filepath.Join(ns.baseDir, "nodes/alice/data") + ":/data",
-		"-v", filepath.Join(ns.baseDir, "nodes/alice/keystore") + ":/keystore",
+		"-v", filepath.Join(ns.baseDir, "genesis.json") + ":/genesis.json",
 		"--network", "benchy-network",
 		"ethereum/client-go:v1.13.15",
 		"--datadir", "/data",
@@ -147,13 +164,10 @@ func (ns *NetworkService) launchAliceNodeClique(ctx context.Context) error {
 		"--allow-insecure-unlock",
 		"--nodiscover", "--maxpeers", "25",
 		"--syncmode", "full", "--verbosity", "3",
-		"--mine", "--miner.etherbase", "0x810685236b82e07D6Cda714A107Ecfa471B76bFD",
-		"--miner.gasprice", "1000000000",
-		"--unlock", "0x810685236b82e07D6Cda714A107Ecfa471B76bFD",
-		"--password", "/dev/null",
+		
 	}
 
-	fmt.Printf("DEBUG: %s\n", strings.Join(cmd[1:], " "))
+	fmt.Printf("DEBUG RUN: %s\n", strings.Join(cmd[1:], " "))
 	execCmd := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	output, err := execCmd.Output()
 	if err != nil {
@@ -165,15 +179,32 @@ func (ns *NetworkService) launchAliceNodeClique(ctx context.Context) error {
 	return nil
 }
 
-// launchBobNodeClique lance Bob avec Geth et Clique (VALIDATOR)
-func (ns *NetworkService) launchBobNodeClique(ctx context.Context) error {
+// launchBobNodeWithGenesis lance Bob avec genesis init
+func (ns *NetworkService) launchBobNodeWithGenesis(ctx context.Context) error {
+	// Étape 1: Init genesis
+	initCmd := []string{
+		"docker", "run", "--rm",
+		"-v", filepath.Join(ns.baseDir, "nodes/bob/data") + ":/data",
+		"-v", filepath.Join(ns.baseDir, "genesis.json") + ":/genesis.json",
+		"--network", "benchy-network",
+		"ethereum/client-go:v1.13.15",
+		"--datadir", "/data", "init", "/genesis.json",
+	}
+	
+	fmt.Printf("DEBUG INIT: %s\n", strings.Join(initCmd[1:], " "))
+	execInitCmd := exec.CommandContext(ctx, initCmd[0], initCmd[1:]...)
+	if err := execInitCmd.Run(); err != nil {
+		return fmt.Errorf("failed to init bob genesis: %w", err)
+	}
+
+	// Étape 2: Lancer le node
 	cmd := []string{
 		"docker", "run", "-d",
 		"--name", "benchy-bob",
 		"-p", "8546:8546",
 		"-p", "30304:30304",
 		"-v", filepath.Join(ns.baseDir, "nodes/bob/data") + ":/data",
-		"-v", filepath.Join(ns.baseDir, "nodes/bob/keystore") + ":/keystore",
+		"-v", filepath.Join(ns.baseDir, "genesis.json") + ":/genesis.json",
 		"--network", "benchy-network",
 		"ethereum/client-go:v1.13.15",
 		"--datadir", "/data",
@@ -185,13 +216,10 @@ func (ns *NetworkService) launchBobNodeClique(ctx context.Context) error {
 		"--allow-insecure-unlock",
 		"--nodiscover", "--maxpeers", "25",
 		"--syncmode", "full", "--verbosity", "3",
-		"--mine", "--miner.etherbase", "0xD7dd76b76CFeE812b06ACb5A50d8870fDf427b3d",
-		"--miner.gasprice", "1000000000",
-		"--unlock", "0xD7dd76b76CFeE812b06ACb5A50d8870fDf427b3d",
-		"--password", "/dev/null",
+		
 	}
 
-	fmt.Printf("DEBUG: %s\n", strings.Join(cmd[1:], " "))
+	fmt.Printf("DEBUG RUN: %s\n", strings.Join(cmd[1:], " "))
 	execCmd := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	output, err := execCmd.Output()
 	if err != nil {
@@ -203,15 +231,31 @@ func (ns *NetworkService) launchBobNodeClique(ctx context.Context) error {
 	return nil
 }
 
-// launchDrissNodeClique lance Driss avec Geth et Clique (PEER seulement)
-func (ns *NetworkService) launchDrissNodeClique(ctx context.Context) error {
+// launchDrissNodeWithGenesis lance Driss avec genesis
+func (ns *NetworkService) launchDrissNodeWithGenesis(ctx context.Context) error {
+	// Init genesis
+	initCmd := []string{
+		"docker", "run", "--rm",
+		"-v", filepath.Join(ns.baseDir, "nodes/driss/data") + ":/data",
+		"-v", filepath.Join(ns.baseDir, "genesis.json") + ":/genesis.json",
+		"--network", "benchy-network",
+		"ethereum/client-go:v1.13.15",
+		"--datadir", "/data", "init", "/genesis.json",
+	}
+	
+	execInitCmd := exec.CommandContext(ctx, initCmd[0], initCmd[1:]...)
+	if err := execInitCmd.Run(); err != nil {
+		return fmt.Errorf("failed to init driss genesis: %w", err)
+	}
+
+	// Lancer node
 	cmd := []string{
 		"docker", "run", "-d",
 		"--name", "benchy-driss",
 		"-p", "8548:8548",
 		"-p", "30306:30306",
 		"-v", filepath.Join(ns.baseDir, "nodes/driss/data") + ":/data",
-		"-v", filepath.Join(ns.baseDir, "nodes/driss/keystore") + ":/keystore",
+		"-v", filepath.Join(ns.baseDir, "genesis.json") + ":/genesis.json",
 		"--network", "benchy-network",
 		"ethereum/client-go:v1.13.15",
 		"--datadir", "/data",
@@ -223,10 +267,8 @@ func (ns *NetworkService) launchDrissNodeClique(ctx context.Context) error {
 		"--allow-insecure-unlock",
 		"--nodiscover", "--maxpeers", "25",
 		"--syncmode", "full", "--verbosity", "3",
-		// Pas de mining pour Driss
 	}
 
-	fmt.Printf("DEBUG: %s\n", strings.Join(cmd[1:], " "))
 	execCmd := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	output, err := execCmd.Output()
 	if err != nil {
@@ -255,7 +297,6 @@ func (ns *NetworkService) launchCassandraNode(ctx context.Context) error {
 		"--Network.P2PPort", "30305",
 	}
 
-	fmt.Printf("DEBUG: %s\n", strings.Join(cmd[1:], " "))
 	execCmd := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	output, err := execCmd.Output()
 	if err != nil {
@@ -284,7 +325,6 @@ func (ns *NetworkService) launchElenaNode(ctx context.Context) error {
 		"--Network.P2PPort", "30307",
 	}
 
-	fmt.Printf("DEBUG: %s\n", strings.Join(cmd[1:], " "))
 	execCmd := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	output, err := execCmd.Output()
 	if err != nil {
